@@ -44,6 +44,7 @@
 
 #include <asm/uaccess.h>
 
+#include <mach/msm_rtb.h>
 #define CREATE_TRACE_POINTS
 #include <trace/events/printk.h>
 
@@ -293,6 +294,53 @@ static inline void boot_delay_msec(void)
 }
 #endif
 
+/*
+ * Return the number of unread characters in the log buffer.
+ */
+static int log_buf_get_len(void)
+{
+	return logged_chars;
+}
+
+/*
+ * Clears the ring-buffer
+ */
+void log_buf_clear(void)
+{
+	logged_chars = 0;
+}
+
+/*
+ * Copy a range of characters from the log buffer.
+ */
+int log_buf_copy(char *dest, int idx, int len)
+{
+	int ret, max;
+	bool took_lock = false;
+
+	if (!oops_in_progress) {
+		raw_spin_lock_irq(&logbuf_lock);
+		took_lock = true;
+	}
+
+	max = log_buf_get_len();
+	if (idx < 0 || idx >= max) {
+		ret = -1;
+	} else {
+		if (len > max - idx)
+			len = max - idx;
+		ret = len;
+		idx += (log_end - max);
+		while (len-- > 0)
+			dest[len] = LOG_BUF(idx + len);
+	}
+
+	if (took_lock)
+		raw_spin_unlock_irq(&logbuf_lock);
+
+	return ret;
+}
+
 #ifdef CONFIG_SECURITY_DMESG_RESTRICT
 int dmesg_restrict = 1;
 #else
@@ -513,7 +561,9 @@ void kdb_syslog_data(char *syslog_data[4])
 static void __call_console_drivers(unsigned start, unsigned end)
 {
 	struct console *con;
-
+#ifdef CONFIG_JRD_PRINTD
+    extern void printd_dump(char *, int);
+#endif    
 	for_each_console(con) {
 		if (exclusive_console && con != exclusive_console)
 			continue;
@@ -521,6 +571,10 @@ static void __call_console_drivers(unsigned start, unsigned end)
 				(cpu_online(smp_processor_id()) ||
 				(con->flags & CON_ANYTIME)))
 			con->write(con, &LOG_BUF(start), end - start);
+
+#ifdef CONFIG_JRD_PRINTD
+		printd_dump(&LOG_BUF(start), end - start);
+#endif
 	}
 }
 
@@ -707,6 +761,23 @@ static bool printk_time = 0;
 #endif
 module_param_named(time, printk_time, bool, S_IRUGO | S_IWUSR);
 
+//* add by zhoujinggao@tcl.com for print CPUID and PID 2014-02-17*/
+#if defined(CONFIG_PRINTK_CPU_ID)
+static int printk_cpu_id = 1;
+#else
+static int printk_cpu_id = 0;
+#endif
+module_param_named(cpu, printk_cpu_id, int, S_IRUGO | S_IWUSR);
+
+#if defined(CONFIG_PRINTK_PID)
+static int printk_pid = 1;
+#else
+static int printk_pid;
+#endif
+module_param_named(pid, printk_pid, int, S_IRUGO | S_IWUSR);
+
+//*add by zhoujinggao@tcl.com for print CPUID and PID 2014-02-17*/
+
 static bool always_kmsg_dump;
 module_param_named(always_kmsg_dump, always_kmsg_dump, bool, S_IRUGO | S_IWUSR);
 
@@ -748,6 +819,11 @@ asmlinkage int printk(const char *fmt, ...)
 {
 	va_list args;
 	int r;
+#ifdef CONFIG_MSM_RTB
+	void *caller = __builtin_return_address(0);
+
+	uncached_logk_pc(LOGK_LOGBUF, caller, (void *)log_end);
+#endif
 
 #ifdef CONFIG_KGDB_KDB
 	if (unlikely(kdb_trap_printk)) {
@@ -884,6 +960,7 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 	printed_len += vscnprintf(printk_buf + printed_len,
 				  sizeof(printk_buf) - printed_len, fmt, args);
 
+
 	p = printk_buf;
 
 	/* Read log level and handle special printk prefix */
@@ -945,6 +1022,33 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 					emit_log_char(*tp);
 				printed_len += tlen;
 			}
+/* add by zhoujinggao@tcl.com for print CPUID and PID 2014-02-17 */
+           if (printk_cpu_id) 
+            {
+                   
+                   char tbuf[10], *tp;
+                   unsigned tlen;
+
+                   tlen = sprintf(tbuf, "c%u ", printk_cpu);
+
+                   for (tp = tbuf; tp < tbuf + tlen; tp++)
+                           emit_log_char(*tp);
+                   printed_len += tlen;
+           }
+
+           if (printk_pid) 
+            {
+                   
+                   char tbuf[10], *tp;
+                   unsigned tlen;
+
+                   tlen = sprintf(tbuf, "%6u ", current->pid);
+
+                   for (tp = tbuf; tp < tbuf + tlen; tp++)
+                           emit_log_char(*tp);
+                   printed_len += tlen;
+           }
+/* end by zhoujinggao@tcl.com for print CPUID and PID 2014-02-17 */
 
 			if (!*p)
 				break;
@@ -1144,6 +1248,14 @@ void resume_console(void)
 	console_unlock();
 }
 
+static void __cpuinit console_flush(struct work_struct *work)
+{
+	console_lock();
+	console_unlock();
+}
+
+static __cpuinitdata DECLARE_WORK(console_cpu_notify_work, console_flush);
+
 /**
  * console_cpu_notify - print deferred console messages after CPU hotplug
  * @self: notifier struct
@@ -1154,18 +1266,27 @@ void resume_console(void)
  * will be spooled but will not show up on the console.  This function is
  * called when a new CPU comes online (or fails to come up), and ensures
  * that any such output gets printed.
+ *
+ * Special handling must be done for cases invoked from an atomic context,
+ * as we can't be taking the console semaphore here.
  */
 static int __cpuinit console_cpu_notify(struct notifier_block *self,
 	unsigned long action, void *hcpu)
 {
 	switch (action) {
-	case CPU_ONLINE:
 	case CPU_DEAD:
-	case CPU_DYING:
 	case CPU_DOWN_FAILED:
 	case CPU_UP_CANCELED:
 		console_lock();
 		console_unlock();
+		break;
+	case CPU_ONLINE:
+	case CPU_DYING:
+		/* invoked with preemption disabled, so defer */
+		if (!console_trylock())
+			schedule_work(&console_cpu_notify_work);
+		else
+			console_unlock();
 	}
 	return NOTIFY_OK;
 }
@@ -1253,6 +1374,26 @@ void wake_up_klogd(void)
 		this_cpu_or(printk_pending, PRINTK_PENDING_WAKEUP);
 }
 
+// add by zhoujinggao from kernel git 2014-02-25
+void log_output_console( void )
+{
+	unsigned	_con_start, _log_end;
+
+	if ( console_sem.count <= 0 )
+	{
+		printk( "Console LOCKED!\n" );
+
+		while( con_start != log_end )
+		{
+			_con_start = con_start;
+			_log_end = log_end;
+			con_start = log_end;		/* Flush */
+			call_console_drivers( _con_start, _log_end );
+		}
+	}
+}
+// add by zhoujinggao from kernel git 2014-02-25
+
 /**
  * console_unlock - unlock the console system
  *
@@ -1314,6 +1455,8 @@ again:
 	raw_spin_lock(&logbuf_lock);
 	if (con_start != log_end)
 		retry = 1;
+	else
+		retry = 0;
 	raw_spin_unlock_irqrestore(&logbuf_lock, flags);
 
 	if (retry && console_trylock())

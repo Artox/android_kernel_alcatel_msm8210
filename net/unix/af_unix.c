@@ -199,6 +199,7 @@ static inline void unix_release_addr(struct unix_address *addr)
  *	        - if started by not zero, should be NULL terminated (FS object)
  *		- if started by zero, it is abstract name.
  */
+// sync moto-g code by zhoujinggao
 
 static int unix_mkname(struct sockaddr_un *sunaddr, int len, unsigned *hashp)
 {
@@ -216,6 +217,7 @@ static int unix_mkname(struct sockaddr_un *sunaddr, int len, unsigned *hashp)
 		 */
 		((char *)sunaddr)[len] = 0;
 		len = strlen(sunaddr->sun_path)+1+sizeof(short);
+		*hashp = 0;
 		return len;
 	}
 
@@ -346,6 +348,7 @@ static void unix_dgram_disconnected(struct sock *sk, struct sock *other)
 		}
 	}
 }
+// sync moto-g code by zhoujinggao
 
 static void unix_sock_destructor(struct sock *sk)
 {
@@ -1104,8 +1107,9 @@ restart:
 	/* Latch state of peer */
 	unix_state_lock(other);
 
-	/* Apparently VFS overslept socket death. Retry. */
+	/* Apparently VFS overslept socket death. Retry. add by HTC code by zhoujinggao */
 	if (sock_flag(other, SOCK_DEAD)) {
+		printk(KERN_INFO "[DEBUG]%s other->sk_flags=%ld on %s(%d)\n", __func__, other->sk_flags, current->comm, current->pid);
 		unix_state_unlock(other);
 		sock_put(other);
 		goto restart;
@@ -1122,9 +1126,11 @@ restart:
 		if (!timeo)
 			goto out_unlock;
 
+		printk(KERN_INFO "[DEBUG]%s skb_queue_len=%d  sk_max_ack_backlog=%d on %s(%d)\n", __func__, skb_queue_len(&other->sk_receive_queue), other->sk_max_ack_backlog, current->comm, current->pid);
 		timeo = unix_wait_for_peer(other, timeo);
 
 		err = sock_intr_errno(timeo);
+		printk(KERN_INFO "[DEBUG]%s timeo=0x%lx, err=%d on %s(%d)\n", __func__, timeo, err, current->comm, current->pid);
 		if (signal_pending(current))
 			goto out;
 		sock_put(other);
@@ -1141,6 +1147,8 @@ restart:
 	   check this before attempt to grab lock.
 
 	   Well, and we have to recheck the state after socket locked.
+	   add by HTC code by zhoujinggao
+	   
 	 */
 	st = sk->sk_state;
 
@@ -1160,6 +1168,7 @@ restart:
 	unix_state_lock_nested(sk);
 
 	if (sk->sk_state != st) {
+		printk(KERN_INFO "[DEBUG]%s sk->sk_state=%d, st=%d on %s(%d)\n", __func__, sk->sk_state, st, current->comm, current->pid);
 		unix_state_unlock(sk);
 		unix_state_unlock(other);
 		sock_put(other);
@@ -1446,7 +1455,7 @@ static int unix_dgram_sendmsg(struct kiocb *kiocb, struct socket *sock,
 	if (NULL == siocb->scm)
 		siocb->scm = &tmp_scm;
 	wait_for_unix_gc();
-	err = scm_send(sock, msg, siocb->scm);
+	err = scm_send(sock, msg, siocb->scm, false);
 	if (err < 0)
 		return err;
 
@@ -1607,7 +1616,7 @@ static int unix_stream_sendmsg(struct kiocb *kiocb, struct socket *sock,
 	if (NULL == siocb->scm)
 		siocb->scm = &tmp_scm;
 	wait_for_unix_gc();
-	err = scm_send(sock, msg, siocb->scm);
+	err = scm_send(sock, msg, siocb->scm, false);
 	if (err < 0)
 		return err;
 

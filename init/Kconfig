@@ -953,6 +953,12 @@ config SYSCTL
 config ANON_INODES
 	bool
 
+config PANIC_TIMEOUT
+	int "Default panic timeout"
+	default 0
+	help
+	  Set default panic timeout.
+
 menuconfig EXPERT
 	bool "Configure standard kernel features (expert users)"
 	# Unhide debug options, to make the on-by-default options visible
@@ -1030,6 +1036,28 @@ config PRINTK
 	  and makes the kernel more or less silent. As this makes it
 	  very difficult to diagnose system problems, saying N here is
 	  strongly discouraged.
+# add by zhoujinggao@tcl.com for print CPUID and PID 2014-02-17
+config PRINTK_CPU_ID
+	default n
+	bool "Enable support for Print working core no. in dmesg" if EXPERT
+	help
+	  Print working core no. in dmesg
+
+config PRINTK_PID
+	default n
+	bool "Enable support for Print working core no. in dmesg" if EXPERT
+	help
+	  Print working core no. in dmesg
+
+
+config SOFTLOCKUP_WATCHDOG_TEST
+	default n
+	bool "Enable watchdog test function" if EXPERT
+	help
+	  Print working core no. in dmesg
+	  
+
+# end by zhoujinggao@tcl.com for print CPUID and PID 2014-02-17
 
 config BUG
 	bool "BUG() support" if EXPERT
@@ -1264,6 +1292,7 @@ config SLAB
 	  per cpu and per node queues.
 
 config SLUB
+	depends on BROKEN || NUMA || !DISCONTIGMEM
 	bool "SLUB (Unqueued Allocator)"
 	help
 	   SLUB is a slab allocator that minimizes cache line usage

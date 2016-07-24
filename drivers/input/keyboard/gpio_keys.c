@@ -30,6 +30,8 @@
 #include <linux/of_gpio.h>
 #include <linux/spinlock.h>
 
+ int keep_double = 0;    //added by zhengdao for auto-triger
+
 struct gpio_button_data {
 	const struct gpio_keys_button *button;
 	struct input_dev *input;
@@ -324,6 +326,69 @@ static struct attribute_group gpio_keys_attr_group = {
 	.attrs = gpio_keys_attrs,
 };
 
+/* [PLATFORM]-Modified-BEGIN by zhengdao, developed for hall start */
+#if 1
+
+#define HAPTIC_INT_GPIO 87
+
+
+
+static void gpio_keys_gpio_report_event(struct gpio_button_data *bdata)
+{
+
+	unsigned int gpio_code = 0;
+
+	const struct gpio_keys_button *button = bdata->button;
+	struct input_dev *input = bdata->input;
+	unsigned int type = button->type ?: EV_KEY;
+	int state = (gpio_get_value_cansleep(button->gpio) ? 1 : 0) ^ button->active_low;
+
+	if (type == EV_ABS) {
+		if (state)
+			input_event(input, type, button->code, button->value);
+	} else {
+        if(button->gpio == HAPTIC_INT_GPIO)
+        {
+           
+		   if(!!state)
+		   
+		   {
+		   if (keep_double ==0)
+		   	{
+             gpio_code = KEY_LOCK_COVER ;
+             input_event(input, type, gpio_code, 1);
+             input_sync(input);
+             input_event(input, type, gpio_code, 0);
+			 keep_double = 1;
+		   	}
+           }
+			else
+			{
+			if(keep_double ==1)
+				{
+             gpio_code = KEY_UNLOCK_COVER ;
+             input_event(input, type, gpio_code, 1);
+             input_sync(input);
+             input_event(input, type, gpio_code, 0);
+		//	 printk("zhengdao_unlock_test");
+			 keep_double = 0;
+				}
+           	}
+		}
+
+		   
+        
+		else
+		{
+		   input_event(input, type, button->code, !!state);
+	    }
+	}
+
+	input_sync(input);
+}
+
+/* [PLATFORM]-Modified-BEGIN by zhengdao, developed for hall end */
+#else
 static void gpio_keys_gpio_report_event(struct gpio_button_data *bdata)
 {
 	const struct gpio_keys_button *button = bdata->button;
@@ -339,6 +404,9 @@ static void gpio_keys_gpio_report_event(struct gpio_button_data *bdata)
 	}
 	input_sync(input);
 }
+
+#endif
+/* [PLATFORM]-Modified-END by zhengdao.li */
 
 static void gpio_keys_gpio_work_func(struct work_struct *work)
 {
@@ -497,6 +565,14 @@ static int __devinit gpio_keys_setup_key(struct platform_device *pdev,
 
 	input_set_capability(input, button->type ?: EV_KEY, button->code);
 
+/* [PLATFORM]-Modified-BEGIN by zhengdao, developed for hall start */
+#if 1
+    input_set_capability(input, EV_KEY, KEY_UNLOCK_COVER);
+    input_set_capability(input, EV_KEY, KEY_LOCK_COVER);
+    
+#endif
+/* [PLATFORM]-Modified-BEGIN by zhengdao, developed for hall end */
+
 	/*
 	 * If platform has specified that the button can be disabled,
 	 * we don't want it to share the interrupt line.
@@ -557,6 +633,7 @@ static int gpio_keys_get_devtree_pdata(struct device *dev,
 	memset(pdata, 0, sizeof *pdata);
 
 	pdata->rep = !!of_get_property(node, "autorepeat", NULL);
+	pdata->name = of_get_property(node, "input-name", NULL);
 
 	/* First count the subnodes */
 	pdata->nbuttons = 0;
@@ -806,6 +883,7 @@ static int gpio_keys_resume(struct device *dev)
 			disable_irq_wake(bdata->irq);
 
 		if (gpio_is_valid(bdata->button->gpio))
+			
 			gpio_keys_gpio_report_event(bdata);
 	}
 	input_sync(ddata->input);

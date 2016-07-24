@@ -16,17 +16,24 @@
 #include <linux/console.h>
 #include <linux/init.h>
 #include <linux/module.h>
+#include <linux/persistent_ram.h>
 #include <linux/platform_device.h>
 #include <linux/proc_fs.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/io.h>
-#include "persistent_ram.h"
 #include "ram_console.h"
 
 static struct persistent_ram_zone *ram_console_zone;
 static const char *bootinfo;
 static size_t bootinfo_size;
+//add by jch for watch dog ramdump
+#include <linux/of.h>
+#include <asm/bootinfo.h>
+static const char *bootinfo_label =
+	"\n\n#############\nCurrent Boot info: %s\nPower Up Reason: 0x%08x\n";
+static size_t bootinfo_label_size;
+//end add by jch
 
 static void
 ram_console_write(struct console *console, const char *s, unsigned int count)
@@ -49,12 +56,60 @@ void ram_console_enable_console(int enabled)
 	else
 		ram_console.flags &= ~CON_ENABLED;
 }
+//add by jch for watch dog ramdump
+#ifdef CONFIG_OF
+static struct ram_console_platform_data *__devinit
+ram_console_of_init(struct platform_device *pdev)
+{
+	struct ram_console_platform_data *pdata = NULL;
+	struct device_node *np = pdev->dev.of_node;
+	struct persistent_ram *ram;
+	struct persistent_ram_descriptor *desc;
 
-static int __init ram_console_probe(struct platform_device *pdev)
+	ram = devm_kzalloc(&pdev->dev, sizeof(*ram), GFP_KERNEL);
+	if (!ram) {
+		dev_err(&pdev->dev, "%s: couldn't allocate ram\n", __func__);
+		return NULL;
+	}
+
+	desc = devm_kzalloc(&pdev->dev, sizeof(*desc), GFP_KERNEL);
+	if (!desc) {
+		dev_err(&pdev->dev, "%s: couldn't allocate desc\n", __func__);
+		return NULL;
+	}
+
+	of_property_read_u32(np, "android,ram-buffer-start", &ram->start);
+	of_property_read_u32(np, "android,ram-buffer-size", &ram->size);
+
+	desc->name = dev_name(&pdev->dev);
+	desc->size = ram->size;
+	ram->descs = desc;
+	ram->num_descs = 1;
+
+	persistent_ram_add(ram);
+
+	return pdata;
+}
+#else
+static inline struct ram_console_platform_data *__devinit
+ram_console_of_init(struct platform_device *pdev)
+{
+	return NULL;
+}
+#endif
+//end add by jch
+static int __devinit ram_console_probe(struct platform_device *pdev)
 {
 	struct ram_console_platform_data *pdata = pdev->dev.platform_data;
 	struct persistent_ram_zone *prz;
-
+//add by jch for watch dog ramdump      
+       char boot_char[20]={0};
+       char_powerup_reason(boot_char);
+	if (pdev->dev.of_node){
+		pr_info("JCH:ram_console_probe. pdev->dev.of_node != NULL\n");
+		pdata = ram_console_of_init(pdev);
+	}
+//end add by jch for watch dog ramdump
 	prz = persistent_ram_init_ringbuffer(&pdev->dev, true);
 	if (IS_ERR(prz))
 		return PTR_ERR(prz);
@@ -62,10 +117,21 @@ static int __init ram_console_probe(struct platform_device *pdev)
 
 	if (pdata) {
 		bootinfo = kstrdup(pdata->bootinfo, GFP_KERNEL);
-		if (bootinfo)
+		//modify by jch for watch dog ramdump
+		
+		/*if (bootinfo)
 			bootinfo_size = strlen(bootinfo);
 	}
-
+	*/
+	        
+			if (bootinfo) {
+			bootinfo_label_size = snprintf(NULL, 0,
+				bootinfo_label, boot_char,bi_powerup_reason());
+			bootinfo_size = strlen(bootinfo)
+					 + bootinfo_label_size;
+		}
+	}
+//end modify by jch for watch dog ramdump    
 	ram_console_zone = prz;
 	ram_console.data = prz;
 
@@ -73,16 +139,27 @@ static int __init ram_console_probe(struct platform_device *pdev)
 
 	return 0;
 }
+//modify by jch for watch dog ramdump
+#ifdef CONFIG_OF
+static struct of_device_id ram_console_of_match[] = {
+	{ .compatible = "android,ram-console", },
+	{ },
+};
 
+MODULE_DEVICE_TABLE(of, ram_console_of_match);
+#endif
+//end modify by jch for watch dog ramdump
 static struct platform_driver ram_console_driver = {
 	.driver		= {
 		.name	= "ram_console",
+		.of_match_table = of_match_ptr(ram_console_of_match),//add by jch for watch dog ramdump
 	},
+	.probe = ram_console_probe,
 };
 
 static int __init ram_console_module_init(void)
 {
-	return platform_driver_probe(&ram_console_driver, ram_console_probe);
+	return platform_driver_register(&ram_console_driver);
 }
 
 #ifndef CONFIG_PRINTK
@@ -99,6 +176,7 @@ static ssize_t ram_console_read_old(struct file *file, char __user *buf,
 	const char *old_log = persistent_ram_old(prz);
 	char *str;
 	int ret;
+	char boot_char[20]={0};//add by jch for watch dog ramdump
 
 	if (dmesg_restrict && !capable(CAP_SYSLOG))
 		return -EPERM;
@@ -115,13 +193,14 @@ static ssize_t ram_console_read_old(struct file *file, char __user *buf,
 	pos -= old_log_size;
 	count = persistent_ram_ecc_string(prz, NULL, 0);
 	if (pos < count) {
-		str = kmalloc(count, GFP_KERNEL);
+		str = kmalloc(count+2, GFP_KERNEL);//modify to +2 by jch for watch dog ramdump
 		if (!str)
 			return -ENOMEM;
 		persistent_ram_ecc_string(prz, str, count + 1);
 		count = min(len, (size_t)(count - pos));
 		ret = copy_to_user(buf, str + pos, count);
 		kfree(str);
+		str = NULL;//add by jch for watch dog ramdump
 		if (ret)
 			return -EFAULT;
 		goto out;
@@ -129,13 +208,40 @@ static ssize_t ram_console_read_old(struct file *file, char __user *buf,
 
 	/* Boot info passed through pdata */
 	pos -= count;
+//modify by jch for watch dog ramdump
+/*
 	if (pos < bootinfo_size) {
 		count = min(len, (size_t)(bootinfo_size - pos));
 		if (copy_to_user(buf, bootinfo + pos, count))
 			return -EFAULT;
 		goto out;
 	}
+*/
+    char_powerup_reason(boot_char);    
+    count = snprintf(NULL, 0, bootinfo_label,boot_char, bi_powerup_reason());
+	if (pos < bootinfo_label_size) {
+		str = kmalloc(count+2, GFP_KERNEL);//modify to +2 by jch for watch dog ramdump
+		if (!str)
+			return -ENOMEM;
+		snprintf(str, count + 1, bootinfo_label,boot_char, bi_powerup_reason());
+		count = min(len, (size_t)(bootinfo_label_size - pos));
+		ret = copy_to_user(buf, str + pos, count);
+		kfree(str);
+		str = NULL;
+		if (ret)
+			return -EFAULT;
+		goto out;
 
+	}
+	pos -= count;
+	if (pos < (bootinfo_size - bootinfo_label_size)) {
+		count = min(len, (size_t)(bootinfo_size -
+					bootinfo_label_size - pos));
+		if (copy_to_user(buf, bootinfo + pos, count))
+			return -EFAULT;
+		goto out;
+	}
+//end modify by jch for watch dog ramdump
 	/* EOF */
 	return 0;
 
@@ -153,13 +259,28 @@ static int __init ram_console_late_init(void)
 {
 	struct proc_dir_entry *entry;
 	struct persistent_ram_zone *prz = ram_console_zone;
-
+       char boot_char[20]={0};//add by jch for watch dog ramdump
+	persistent_ram_ext_oldbuf_merge(prz);//add by jch for watch dog ramdump
+       pr_info("JCH:am_console_late_init,prz=%s,prz_size=%d.\n",(!prz)?"NULL":"NOT-NULL",persistent_ram_old_size(prz));  //add by jch for watch dog ramdump
 	if (!prz)
 		return 0;
 
 	if (persistent_ram_old_size(prz) == 0)
 		return 0;
-
+//add by jch for watch dog ramdump
+       char_powerup_reason(boot_char);
+       pr_info("JCH:ram console get boot reason:%s\n",boot_char);
+	if (!bootinfo) {
+		bootinfo = kstrdup(boot_command_line, GFP_KERNEL);
+		if (bootinfo) {
+			bootinfo_label_size =
+				snprintf(NULL, 0, bootinfo_label,
+						boot_char,bi_powerup_reason());
+			bootinfo_size = strlen(bootinfo)
+					 + bootinfo_label_size;
+		}
+	}
+//end add by jch for watch dog ramdump
 	entry = create_proc_entry("last_kmsg", S_IFREG | S_IRUGO, NULL);
 	if (!entry) {
 		printk(KERN_ERR "ram_console: failed to create proc entry\n");

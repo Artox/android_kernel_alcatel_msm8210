@@ -55,7 +55,9 @@ extern int proc_pid_status(struct seq_file *m, struct pid_namespace *ns,
 extern int proc_pid_statm(struct seq_file *m, struct pid_namespace *ns,
 				struct pid *pid, struct task_struct *task);
 extern loff_t mem_lseek(struct file *file, loff_t offset, int orig);
-
+//ying.pang to display swap information in procrank begin
+extern const struct file_operations proc_pid_jrd_maps_operations;
+//ying.pang to display swap information in procrank end
 extern const struct file_operations proc_pid_maps_operations;
 extern const struct file_operations proc_tid_maps_operations;
 extern const struct file_operations proc_pid_numa_maps_operations;

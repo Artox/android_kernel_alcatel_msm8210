@@ -59,6 +59,7 @@ void rtc_time_to_tm(unsigned long time, struct rtc_time *tm)
 	/* day of the week, 1970-01-01 was a Thursday */
 	tm->tm_wday = (days + 4) % 7;
 
+	/* modify by xcb for setting the defalut date to 2010-01-01 */
 	year = 1970 + days / 365;
 	days -= (year - 1970) * 365
 		+ LEAPS_THRU_END_OF(year - 1)

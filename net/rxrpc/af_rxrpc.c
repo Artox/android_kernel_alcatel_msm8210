@@ -656,6 +656,8 @@ static int rxrpc_create(struct net *net, struct socket *sock, int protocol,
 	return 0;
 }
 
+// sync moto-g code by zhoujinggao
+
 /*
  * RxRPC socket destructor
  */

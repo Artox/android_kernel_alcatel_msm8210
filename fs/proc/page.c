@@ -9,6 +9,10 @@
 #include <linux/seq_file.h>
 #include <linux/hugetlb.h>
 #include <linux/kernel-page-flags.h>
+//ying.pang to display swap information in procrank begin
+#include <linux/swap.h>
+#include <linux/swapops.h>
+//ying.pang to display swap information in procrank end
 #include <asm/uaccess.h>
 #include "internal.h"
 
@@ -27,11 +31,20 @@ static ssize_t kpagecount_read(struct file *file, char __user *buf,
 	struct page *ppage;
 	unsigned long src = *ppos;
 	unsigned long pfn;
+	//ying.pang for swap optimize begin
+	unsigned long max_pfn_kpmsize = max_pfn * KPMSIZE;
+	//ying.pang for swap optimize end
 	ssize_t ret = 0;
 	u64 pcount;
 
 	pfn = src / KPMSIZE;
-	count = min_t(size_t, count, (max_pfn * KPMSIZE) - src);
+//ying.pang for swap optimize begin
+	// merge from MTK platform  for swap optimize zhengwei.zheng 2014-03-05
+	//count = min_t(size_t, count, (max_pfn * KPMSIZE) - src);
+	if(src != max_pfn_kpmsize){
+        count = min_t(size_t, count, max_pfn_kpmsize - src);
+	}
+//ying.pang for swap optimize end
 	if (src & KPMMASK || count & KPMMASK)
 		return -EINVAL;
 
@@ -65,7 +78,51 @@ static const struct file_operations proc_kpagecount_operations = {
 	.llseek = mem_lseek,
 	.read = kpagecount_read,
 };
+//ying.pang to display swap information in procrank begin
+#ifdef CONFIG_SWAP
+extern struct swap_info_struct *swap_info_get(swp_entry_t entry);
+extern void swap_info_unlock(struct swap_info_struct *p);
 
+static inline unsigned char swap_count(unsigned char ent)
+{
+	return ent & ~SWAP_HAS_CACHE;	/* may include SWAP_HAS_CONT flag */
+}
+static ssize_t kpageswapn_read(struct file *file, char __user *buf,
+			     size_t count, loff_t *ppos)
+{
+	u64 __user *out = (u64 __user *)buf;
+	unsigned long src = *ppos;
+	swp_entry_t swap_entry;
+	ssize_t ret = 0;
+	struct swap_info_struct *p;
+	swap_entry.val = src / KPMSIZE;
+	if (src & KPMMASK || count & KPMMASK) {
+		printk(KERN_INFO "kpageswapn_read return EINVAL\n");
+		return -EINVAL;
+	}
+	p = swap_info_get(swap_entry);
+	if (p) {
+		u64 swapcount = swap_count(p->swap_map[swp_offset(swap_entry)]);
+		if (put_user(swapcount, out)) {
+			printk(KERN_INFO "kpageswapn_read put user failed\n");
+			ret = -EFAULT;
+		}
+		swap_info_unlock(p);
+	} else {
+		printk(KERN_INFO "kpageswapn_read swap_info_get failed\n");
+		ret = -EFAULT;
+	}
+	if (!ret) {
+		*ppos += KPMSIZE;
+		ret = KPMSIZE;
+	}
+	return ret;
+}
+static const struct file_operations proc_kpageswapn_operations = {
+	.llseek = mem_lseek,
+	.read = kpageswapn_read,
+};
+#endif // CONFIG_SWAP
 /* /proc/kpageflags - an array exposing page flags
  *
  * Each entry is a u64 representing the corresponding
@@ -171,10 +228,19 @@ static ssize_t kpageflags_read(struct file *file, char __user *buf,
 	struct page *ppage;
 	unsigned long src = *ppos;
 	unsigned long pfn;
+	//ying.pang for swap optimize begin
+	unsigned long max_pfn_kpmsize = max_pfn * KPMSIZE;
+	//ying.pang for swap optimize end
 	ssize_t ret = 0;
 
 	pfn = src / KPMSIZE;
-	count = min_t(unsigned long, count, (max_pfn * KPMSIZE) - src);
+//ying.pang for swap optimize begin
+// merge from MTK platform  for swap optimize zhengwei.zheng 2014-03-05
+	//count = min_t(unsigned long, count, (max_pfn * KPMSIZE) - src);
+	if(src != max_pfn_kpmsize){
+	    count = min_t(unsigned long, count, max_pfn_kpmsize - src);
+	}
+//ying.pang for swap optimize end
 	if (src & KPMMASK || count & KPMMASK)
 		return -EINVAL;
 
@@ -208,6 +274,11 @@ static const struct file_operations proc_kpageflags_operations = {
 static int __init proc_page_init(void)
 {
 	proc_create("kpagecount", S_IRUSR, NULL, &proc_kpagecount_operations);
+//ying.pang to display swap information in procrank begin
+#ifdef CONFIG_SWAP
+	proc_create("kpageswapn", S_IRUSR, NULL, &proc_kpageswapn_operations);
+#endif // CONFIG_SWAP
+//ying.pang to display swap information in procrank end
 	proc_create("kpageflags", S_IRUSR, NULL, &proc_kpageflags_operations);
 	return 0;
 }

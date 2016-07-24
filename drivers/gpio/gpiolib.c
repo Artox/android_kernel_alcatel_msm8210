@@ -262,8 +262,13 @@ static ssize_t gpio_direction_store(struct device *dev,
 	return status ? : size;
 }
 
+#ifdef CONFIG_EMODE_GPIO_ENG 
+static /* const */ DEVICE_ATTR(direction, 0666,
+		gpio_direction_show, gpio_direction_store);
+#else
 static /* const */ DEVICE_ATTR(direction, 0644,
 		gpio_direction_show, gpio_direction_store);
+#endif
 
 static ssize_t gpio_value_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -319,8 +324,13 @@ static ssize_t gpio_value_store(struct device *dev,
 	return status;
 }
 
+#ifdef CONFIG_EMODE_GPIO_ENG
+static const DEVICE_ATTR(value, 0666,
+		gpio_value_show, gpio_value_store);
+#else
 static const DEVICE_ATTR(value, 0644,
 		gpio_value_show, gpio_value_store);
+#endif
 
 static irqreturn_t gpio_sysfs_irq(int irq, void *priv)
 {
@@ -473,7 +483,11 @@ found:
 	return status;
 }
 
+#ifdef CONFIG_EMODE_GPIO_ENG
+static DEVICE_ATTR(edge, 0666, gpio_edge_show, gpio_edge_store);
+#else
 static DEVICE_ATTR(edge, 0644, gpio_edge_show, gpio_edge_store);
+#endif
 
 static int sysfs_set_active_low(struct gpio_desc *desc, struct device *dev,
 				int value)
@@ -542,8 +556,13 @@ static ssize_t gpio_active_low_store(struct device *dev,
 	return status ? : size;
 }
 
+#ifdef CONFIG_EMODE_GPIO_ENG
+static const DEVICE_ATTR(active_low, 0666,
+		gpio_active_low_show, gpio_active_low_store);
+#else
 static const DEVICE_ATTR(active_low, 0644,
 		gpio_active_low_show, gpio_active_low_store);
+#endif
 
 static const struct attribute *gpio_attrs[] = {
 	&dev_attr_value.attr,
@@ -1081,6 +1100,10 @@ int gpiochip_add(struct gpio_chip *chip)
 		}
 	}
 
+#ifdef CONFIG_PINCTRL
+	INIT_LIST_HEAD(&chip->pin_ranges);
+#endif
+
 	of_gpiochip_add(chip);
 
 unlock:
@@ -1177,6 +1200,47 @@ struct gpio_chip *gpiochip_find(const void *data,
 	return chip;
 }
 EXPORT_SYMBOL_GPL(gpiochip_find);
+
+#ifdef CONFIG_PINCTRL
+int gpiochip_add_pin_range(struct gpio_chip *chip, const char *pinctl_name,
+			   unsigned int pin_base, unsigned int npins)
+{
+	struct gpio_pin_range *pin_range;
+
+	pin_range = devm_kzalloc(chip->dev, sizeof(*pin_range), GFP_KERNEL);
+	if (!pin_range) {
+		pr_err("%s: GPIO chip: failed to allocate pin ranges\n",
+				chip->label);
+		return -ENOMEM;
+	}
+
+	pin_range->range.name = chip->label;
+	pin_range->range.base = chip->base;
+	pin_range->range.pin_base = pin_base;
+	pin_range->range.npins = npins;
+	pin_range->pctldev = pinctrl_find_and_add_gpio_range(pinctl_name,
+			&pin_range->range);
+
+	list_add_tail(&pin_range->node, &chip->pin_ranges);
+
+	return 0;
+}
+
+void gpiochip_remove_pin_ranges(struct gpio_chip *chip)
+{
+	struct gpio_pin_range *pin_range, *tmp;
+
+	list_for_each_entry_safe(pin_range, tmp, &chip->pin_ranges, node) {
+		list_del(&pin_range->node);
+		pinctrl_remove_gpio_range(pin_range->pctldev,
+				&pin_range->range);
+	}
+}
+#else
+void gpiochip_add_pin_range(struct gpio_chip *chip, const char *pinctl_name,
+		unsigned int pin_base, unsigned int npins) {}
+void gpiochip_remove_pin_ranges(struct gpio_chip *chip) {}
+#endif
 
 /* These "optional" allocation calls help prevent drivers from stomping
  * on each other, and help provide better diagnostics in debugfs.

@@ -185,10 +185,62 @@ static const struct file_operations meminfo_proc_fops = {
 	.llseek		= seq_lseek,
 	.release	= single_release,
 };
+//add by chenghui.jia for swap to zram get meminfo
+
+static int total_mem_proc_show(struct seq_file *m, void *v)
+{
+	struct sysinfo i;
+	unsigned long committed;
+	unsigned long allowed;
+	struct vmalloc_info vmi;
+	long cached;
+	unsigned long pages[NR_LRU_LISTS];
+	int lru;
+
+#define K(x) ((x) << (PAGE_SHIFT - 10))
+	si_meminfo(&i);
+	si_swapinfo(&i);
+	committed = percpu_counter_read_positive(&vm_committed_as);
+	allowed = ((totalram_pages - hugetlb_total_pages())
+		* sysctl_overcommit_ratio / 100) + total_swap_pages;
+
+	cached = global_page_state(NR_FILE_PAGES) -
+			total_swapcache_pages - i.bufferram;
+	if (cached < 0)
+		cached = 0;
+
+	get_vmalloc_info(&vmi);
+
+	for (lru = LRU_BASE; lru < NR_LRU_LISTS; lru++)
+		pages[lru] = global_page_state(NR_LRU_BASE + lru);
+
+	seq_printf(m,"%8lu\n",K(i.totalram));
+
+	hugetlb_report_meminfo(m);
+
+	arch_report_meminfo(m);
+
+	return 0;
+#undef K
+}
+
+static int total_mem_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, total_mem_proc_show, NULL);
+}
+
+static const struct file_operations total_mem_proc_fops = {
+	.open		= total_mem_proc_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+//end add by chenghui.jia
 
 static int __init proc_meminfo_init(void)
 {
 	proc_create("meminfo", 0, NULL, &meminfo_proc_fops);
+	proc_create("total_mem", 0, NULL, &total_mem_proc_fops);//add by chenghui.jia for swap to zram get meminfo
 	return 0;
 }
 module_init(proc_meminfo_init);

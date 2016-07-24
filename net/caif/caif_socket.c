@@ -1005,7 +1005,7 @@ static const struct proto_ops caif_stream_ops = {
 	.mmap = sock_no_mmap,
 	.sendpage = sock_no_sendpage,
 };
-
+// sync moto-g code by zhoujinggao
 /* This function is called when a socket is finally destroyed. */
 static void caif_sock_destructor(struct sock *sk)
 {

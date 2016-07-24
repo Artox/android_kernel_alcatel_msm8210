@@ -360,6 +360,22 @@ static void convert_fuse_statfs(struct kstatfs *stbuf, struct fuse_kstatfs *attr
 	stbuf->f_ffree   = attr->ffree;
 	stbuf->f_namelen = attr->namelen;
 	/* fsid is left zero */
+//modified by zhiling.chen,merged by wenzhao.guo start	
+#ifdef LIMIT_USERDATA_SIZE
+	stbuf->f_blocks  -= (u32)USERDATA_PARTITION_RESERVED_SIZE_TH/attr->bsize;
+	
+	if(stbuf->f_bfree < ((u32)USERDATA_PARTITION_RESERVED_SIZE_TH/attr->bsize)){
+		stbuf->f_bfree = 0;
+	}else{
+		stbuf->f_bfree	 -= (u32)USERDATA_PARTITION_RESERVED_SIZE_TH/attr->bsize;
+	}
+	if(stbuf->f_bavail < ((u32)USERDATA_PARTITION_RESERVED_SIZE_TH/attr->bsize)){
+		stbuf->f_bavail = 0;
+	}else{
+		stbuf->f_bavail	 -= (u32)USERDATA_PARTITION_RESERVED_SIZE_TH/attr->bsize;
+	}
+#endif
+//modified by zhiling.chen,merged by wenzhao.guo end
 }
 
 static int fuse_statfs(struct dentry *dentry, struct kstatfs *buf)

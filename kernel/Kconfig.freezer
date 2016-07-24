@@ -1,2 +1,6 @@
 config FREEZER
 	def_bool PM_SLEEP || CGROUP_FREEZER
+config JRD_PRINTD
+    def_bool n
+config JRD_DUMP_PROCESS
+    def_bool n
